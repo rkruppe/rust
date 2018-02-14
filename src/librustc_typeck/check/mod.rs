@@ -841,7 +841,7 @@ fn typeck_tables_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         let fcx = if let Some(decl) = fn_decl {
             let fn_sig = tcx.fn_sig(def_id);
 
-            check_abi(tcx, span, fn_sig.abi());
+            check_abi(tcx, span, fn_sig);
 
             // Compute the fty from point of view of inside fn.
             let fn_sig =
@@ -894,10 +894,38 @@ fn typeck_tables_of<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     tables
 }
 
-fn check_abi<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, span: Span, abi: Abi) {
+fn check_abi<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, span: Span, fn_sig: PolyFnSig) {
+    let abi = fn_sig.abi();
     if !tcx.sess.target.target.is_abi_supported(abi) {
         struct_span_err!(tcx.sess, span, E0570,
             "The ABI `{}` is not supported for the current target", abi).emit()
+    }
+    // Feature gate SIMD types in FFI, since they have severe problems when caller and callee have
+    // mismatching `target_feature`s. Rust ABI and intrinsics are exempt since the former pass
+    // vectors in memory and the latter are magic.
+
+    // TODO extern fns can be generic, so we need to deal with that somehow. I guess we should just ignore ?
+    // (this still leaves a hole w/ assoc types, doesn't it? <.<)
+
+    // TODO ask in #rustc about the right way to do that
+    if abi != abi::Abi::RustIntrinsic && abi != abi::Abi::PlatformIntrinsic
+            && !tcx.sess.features.borrow().simd_ffi {
+        let check = |ast_ty: &hir::Ty, ty: Ty| {
+            if ty.is_simd() {
+                tcx.sess.struct_span_err(ast_ty.span,
+                              &format!("use of SIMD type `{}` in FFI is highly experimental and \
+                                        may result in invalid code",
+                                       tcx.hir.node_to_pretty_string(ast_ty.id)))
+                    .help("add #![feature(simd_ffi)] to the crate attributes to enable")
+                    .emit();
+            }
+        };
+        for (input, ty) in decl.inputs.iter().zip(*fty.inputs().skip_binder()) {
+            check(&input, ty)
+        }
+        if let hir::Return(ref ty) = decl.output {
+            check(&ty, *fty.output().skip_binder())
+        }
     }
 }
 
@@ -1190,7 +1218,8 @@ pub fn check_item_type<'a,'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, it: &'tcx hir::Item
         check_bounds_are_used(tcx, generics, pty_ty);
       }
       hir::ItemForeignMod(ref m) => {
-        check_abi(tcx, it.span, m.abi);
+        let def_id = tcx.hir.local_def_id(it.id);
+        check_abi(tcx, it.span, tcx.fn_sig(def_id));
 
         if m.abi == Abi::RustIntrinsic {
             for item in &m.items {

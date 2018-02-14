@@ -1671,28 +1671,7 @@ fn compute_sig_of_foreign_fn_decl<'a, 'tcx>(
 {
     let fty = AstConv::ty_of_fn(&ItemCtxt::new(tcx, def_id), hir::Unsafety::Unsafe, abi, decl);
 
-    // feature gate SIMD types in FFI, since I (huonw) am not sure the
-    // ABIs are handled at all correctly.
-    if abi != abi::Abi::RustIntrinsic && abi != abi::Abi::PlatformIntrinsic
-            && !tcx.sess.features.borrow().simd_ffi {
-        let check = |ast_ty: &hir::Ty, ty: Ty| {
-            if ty.is_simd() {
-                tcx.sess.struct_span_err(ast_ty.span,
-                              &format!("use of SIMD type `{}` in FFI is highly experimental and \
-                                        may result in invalid code",
-                                       tcx.hir.node_to_pretty_string(ast_ty.id)))
-                    .help("add #![feature(simd_ffi)] to the crate attributes to enable")
-                    .emit();
-            }
-        };
-        for (input, ty) in decl.inputs.iter().zip(*fty.inputs().skip_binder()) {
-            check(&input, ty)
-        }
-        if let hir::Return(ref ty) = decl.output {
-            check(&ty, *fty.output().skip_binder())
-        }
-    }
-
+//TODO improve this
     fty
 }
 
